@@ -1,4 +1,4 @@
-# 🖼️ Y - Temporary Image Sharing App
+# 🖼️ Y - Image Sharing App
 
 
 ## Description
