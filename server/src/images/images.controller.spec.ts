@@ -15,4 +15,10 @@ describe('ImagesController', () => {
   it('should be defined', () => {
     expect(controller).toBeDefined();
   });
+  
+  it('should return a list of images', async () => {
+    const images = await controller.getImages();
+    expect(images).toBeDefined();
+    expect(images.length).toBeInstanceOf(Array);
+  });
 });
