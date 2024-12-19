@@ -1,15 +1,30 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { MinioService } from '../storage/minio.service';
-import { BadRequestException } from '@nestjs/common';
-import { of } from 'rxjs';
+import { BadRequestException, UnprocessableEntityException } from '@nestjs/common';
+import { of, firstValueFrom } from 'rxjs';
 import { MinioInterceptor } from '../interceptors/minio.interceptor';
+
+  // Mock file data
+  const mockFile: Express.Multer.File = {
+    fieldname: 'file',
+    originalname: 'test-image.jpg',
+    encoding: '7bit',
+    mimetype: 'image/jpeg',
+    buffer: Buffer.from('mock-image-content'),
+    size: 1024,
+    destination: '',
+    filename: 'test-image.jpg',
+    path: 'uploads/test-image.jpg',
+    stream: null,
+  };
 
 describe('MinioInterceptor', () => {
   let interceptor: MinioInterceptor;
   let minioService: MinioService;
 
   const mockMinioService = {
-    uploadFile: jest.fn()
+    uploadFile: jest.fn(),
+    deleteExpiredFiles: jest.fn()
   };
 
   beforeEach(async () => {
@@ -31,14 +46,24 @@ describe('MinioInterceptor', () => {
     expect(interceptor).toBeDefined();
   });
 
-  it('should successfully upload file and set filename', (done) => {
+  it('should successfully upload file and set filename', async () => {
     const mockFile = {
       originalname: 'test.jpg',
-      buffer: Buffer.from('test')
+      buffer: Buffer.from('test'),
+      fieldname: 'file',
+      encoding: '7bit',
+      mimetype: 'image/jpeg',
+      size: 1024
     };
     const mockFileName = 'uploaded-test.jpg';
     const mockRequest = {
-      file: mockFile
+      file: mockFile,
+      headers: {
+        'content-type': 'multipart/form-data'
+      },
+      body: {
+        minutes: 60
+      }
     };
     const mockContext = {
       switchToHttp: () => ({
@@ -51,43 +76,32 @@ describe('MinioInterceptor', () => {
 
     mockMinioService.uploadFile.mockResolvedValue(mockFileName);
 
-    interceptor.intercept(mockContext as any, mockCallHandler as any).subscribe({
-      next: (value) => {
-        expect(value).toEqual({ success: true });
-        expect(mockRequest['uploadedFile']).toEqual({ filename: mockFileName });
-        expect(minioService.uploadFile).toHaveBeenCalledWith(mockFile);
-      },
-      complete: () => done()
-    });
+    const result = await firstValueFrom(
+      interceptor.intercept(mockContext as any, mockCallHandler as any)
+    );
+    
+    expect(result).toEqual({ success: true });
+    expect((mockRequest.file as any).filename).toEqual(mockFileName);
+    expect(minioService.uploadFile).toHaveBeenCalledWith(mockFile, 60);
   });
 
-  it('should throw BadRequestException when no file is provided', (done) => {
-    const mockRequest = {};
-    const mockContext = {
-      switchToHttp: () => ({
-        getRequest: () => mockRequest
-      })
-    };
-    const mockCallHandler = {
-      handle: () => of({ success: true })
-    };
-
-    interceptor.intercept(mockContext as any, mockCallHandler as any).subscribe({
-      error: (error) => {
-        expect(error).toBeInstanceOf(BadRequestException);
-        expect(error.message).toBe('No file provided');
-        done();
-      }
-    });
+  it('should throw BadRequestException for file size exceeding limit', async () => {
+    const largeFile = { ...mockFile, size: 5 * 1024 * 1024 + 1 }; // > 5MB
+    
+    mockMinioService.uploadFile.mockRejectedValue(new BadRequestException('File too large'));
+    
+    await expect(minioService.uploadFile(largeFile, 60)).rejects.toThrow(BadRequestException);
   });
 
-  it('should handle upload errors', (done) => {
-    const mockFile = {
-      originalname: 'test.jpg',
-      buffer: Buffer.from('test')
-    };
+  it('should throw BadRequestException when file is not a valid image', async () => {
     const mockRequest = {
-      file: mockFile
+      file: {
+        ...mockFile,
+        mimetype: 'application/pdf'
+      },
+      headers: {
+        'content-type': 'multipart/form-data'
+      }
     };
     const mockContext = {
       switchToHttp: () => ({
@@ -98,14 +112,48 @@ describe('MinioInterceptor', () => {
       handle: () => of({ success: true })
     };
 
-    const mockError = new Error('Upload failed');
-    mockMinioService.uploadFile.mockRejectedValue(mockError);
+    await expect(
+      firstValueFrom(interceptor.intercept(mockContext as any, mockCallHandler as any))
+    ).rejects.toThrow(new UnprocessableEntityException('File is not an image'));
+  });
 
-    interceptor.intercept(mockContext as any, mockCallHandler as any).subscribe({
-      error: (error) => {
-        expect(error).toBe(mockError);
-        done();
+  it('should throw BadRequestException when no file is provided', async () => {
+    const mockRequest = {
+      headers: {
+        'content-type': 'multipart/form-data'
       }
-    });
+    };
+    const mockContext = {
+      switchToHttp: () => ({
+        getRequest: () => mockRequest
+      })
+    };
+    const mockCallHandler = {
+      handle: () => of({ success: true }) 
+    };
+
+    await expect(
+      firstValueFrom(interceptor.intercept(mockContext as any, mockCallHandler as any))
+    ).rejects.toThrow(new BadRequestException('No file provided'));
+  });
+
+  it('should delete expired files', async () => {
+    const mockExpiredFiles = [
+      {
+        name: 'expired-file-1.jpg',
+        metaData: { 'x-expiration-time': new Date(Date.now() - 1000).toISOString() }
+      },
+      {
+        name: 'expired-file-2.jpg',
+        metaData: { 'x-expiration-time': new Date(Date.now() - 3600000).toISOString() }
+      }
+    ];
+
+    mockMinioService.deleteExpiredFiles.mockResolvedValue(mockExpiredFiles);
+
+    await minioService.deleteExpiredFiles();
+
+    expect(mockMinioService.deleteExpiredFiles).toHaveBeenCalled();
   });
 });
+

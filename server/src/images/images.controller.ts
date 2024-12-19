@@ -8,7 +8,8 @@ import {
   Res,
   StreamableFile,
   Req,
-  UploadedFile
+  UploadedFile,
+  Body
 } from '@nestjs/common';
 import { Response } from 'express';
 import { MinioInterceptor } from '../interceptors/minio.interceptor';
@@ -21,8 +22,8 @@ export class ImagesController {
 
   @Post()
   @UseInterceptors(MinioInterceptor)
-  async uploadImage(@UploadedFile() file: Express.Multer.File): Promise<{ url: string }> {
-    return this.imagesService.uploadImage(file);
+  async uploadImage(@UploadedFile() file: Express.Multer.File, @Body() body: { minutes: number }): Promise<{ url: string }> {
+    return this.imagesService.uploadImage(file, body.minutes);
   }
 
   @Get(':id')

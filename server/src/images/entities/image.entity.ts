@@ -11,6 +11,9 @@ export class Image {
   @Column()
   mimeType: string;
 
+  @Column()
+  expiresAt: Date;
+
   @CreateDateColumn()
   createdAt: Date;
 }

@@ -16,10 +16,11 @@ export class ImagesService {
     private configService: ConfigService
   ) {}
 
-  async uploadImage(file: Express.Multer.File): Promise<{ url: string }> {    
+  async uploadImage(file: Express.Multer.File, minutes: number): Promise<{ url: string }> {
     const image = this.imageRepository.create({
       filename: file.filename,
-      mimeType: file.mimetype
+      mimeType: file.mimetype,
+      expiresAt: new Date(Date.now() + minutes * 60 * 1000)
     });
 
     await this.imageRepository.save(image);

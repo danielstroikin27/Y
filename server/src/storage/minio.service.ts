@@ -1,13 +1,14 @@
-import { Injectable, OnModuleInit, NotFoundException } from '@nestjs/common';
+import { Injectable, OnModuleInit, NotFoundException, BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Client } from 'minio';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 
 @Injectable()
 export class MinioService implements OnModuleInit {
   private minioClient: Client;
   private readonly BUCKET_NAME = 'images';
-  private readonly EXPIRATION_DAYS = 7;
+  private readonly EXPIRATION_MINUTES = 60;
 
   constructor(private configService: ConfigService) {
     this.minioClient = new Client({
@@ -28,31 +29,26 @@ export class MinioService implements OnModuleInit {
     if (!exists) {
       await this.minioClient.makeBucket(this.BUCKET_NAME);
     }
-
-    const lifecycleConfig = {
-      Rule: [
-        {
-          ID: 'expire-rule',
-          Status: 'Enabled',
-          Expiration: {
-            Days: this.EXPIRATION_DAYS,
-          },
-        },
-      ],
-    };
-
-    await this.minioClient.setBucketLifecycle(this.BUCKET_NAME, lifecycleConfig);
   }
 
-  async uploadFile(file: Express.Multer.File): Promise<string> {
+  async uploadFile(file: Express.Multer.File, minutes: number): Promise<string> {
+    if (file.size > 5 * 1024 * 1024) {
+      throw new BadRequestException('File size exceeds the limit of 5MB');
+    }
+
     const fileName = `${randomUUID()}-${file.originalname}`;
+    const expirationTime = new Date();
+    expirationTime.setMinutes(expirationTime.getMinutes() + Number(minutes));
     
     await this.minioClient.putObject(
       this.BUCKET_NAME,
       fileName,
       file.buffer,
       file.size,
-      {mimetype: file.mimetype}
+      {
+        'Content-Type': file.mimetype,
+        'X-Expiration-Time': expirationTime.toISOString(),
+      }
     );
 
     return fileName;
@@ -60,10 +56,17 @@ export class MinioService implements OnModuleInit {
 
   async getFileStream(fileName: string): Promise<NodeJS.ReadableStream> {
     try {
+      const stat = await this.minioClient.statObject(this.BUCKET_NAME, fileName);
+      const expirationTime = new Date(stat.metaData['x-expiration-time']);
+      
+      if (expirationTime < new Date()) {
+        throw new NotFoundException('File has expired');
+      }
+      
       return await this.minioClient.getObject(this.BUCKET_NAME, fileName);
     } catch (error) {
       if (error.code === 'NotFound') {
-        throw new NotFoundException('File not found or has expired');
+        throw new NotFoundException('File not found');
       }
       throw error;
     }
@@ -71,12 +74,30 @@ export class MinioService implements OnModuleInit {
 
   async statObject(fileName: string): Promise<void> {
     try {
-      await this.minioClient.statObject(this.BUCKET_NAME, fileName);
+      const stat = await this.minioClient.statObject(this.BUCKET_NAME, fileName);
+      const expirationTime = new Date(stat.metaData['x-expiration-time']);
+      
+      if (expirationTime < new Date()) {
+        throw new NotFoundException('File has expired');
+      }
     } catch (error) {
       if (error.code === 'NotFound') {
-        throw new NotFoundException('File not found or has expired');
+        throw new NotFoundException('File not found');
       }
       throw error;
+    }
+  }
+
+  // Add cron job to delete expired files
+  @Cron(CronExpression.EVERY_MINUTE)
+  async deleteExpiredFiles() {
+    const bucketStream = await this.minioClient.listObjects(this.BUCKET_NAME, '', true);
+    for await (const file of bucketStream) {
+      const stat = await this.minioClient.statObject(this.BUCKET_NAME, file.name);
+      const expirationTime = new Date(stat.metaData['x-expiration-time']);
+      if (expirationTime < new Date()) {
+        await this.minioClient.removeObject(this.BUCKET_NAME, file.name);
+      }
     }
   }
 }

@@ -4,6 +4,7 @@ import {
   ExecutionContext,
   CallHandler,
   BadRequestException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import * as multer from 'multer';
@@ -34,7 +35,12 @@ export class MinioInterceptor implements NestInterceptor {
             return;
           }
 
-          const fileName = await this.minioService.uploadFile(file);
+          if (!file.mimetype.startsWith('image/')) {
+            subscriber.error(new UnprocessableEntityException('File is not an image'));
+            return;
+          }
+
+          const fileName = await this.minioService.uploadFile(file, request.body.minutes);
 
           request.file.filename= fileName;
 
