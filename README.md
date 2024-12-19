@@ -65,3 +65,34 @@ The app uses **MinIO** as the object storage solution for managing image files b
 - **Response:**
   - Image file: Returns the image content.
   - **Error:** 404 if the image does not exist or has expired.
+
+## Installation
+
+### Prerequisites
+- Node.js (v18 or higher)
+- PostgreSQL
+- MinIO Server
+
+Or simply
+
+- Docker
+
+### Local Development Setup
+
+1. **Clone the repository**
+
+```bash
+git clone https://github.com/danielstroikin27/Y
+```
+
+2. **Install dependencies**
+
+```bash
+cd Y
+docker compose up
+```
+
+3. **Access the application**
+
+Open your browser and navigate to `http://localhost:3000` to access the application.
+
