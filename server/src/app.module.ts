@@ -5,6 +5,8 @@ import { ImagesModule } from './images/images.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import * as dotenv from 'dotenv';
 import { DataSourceOptions } from 'typeorm';
+import { MinioModule } from './storage/storage.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 dotenv.config(); // Load environment variables from .env
 
@@ -23,7 +25,7 @@ const typeOrmConfig: DataSourceOptions = {
 };
 
 @Module({
-  imports: [ImagesModule, TypeOrmModule.forRoot(typeOrmConfig)],
+  imports: [ImagesModule, TypeOrmModule.forRoot(typeOrmConfig), MinioModule, ScheduleModule.forRoot()],
   controllers: [AppController],
   providers: [AppService],
 })

@@ -1,34 +1,60 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Image } from './entities/image.entity';
-import * as fs from 'fs';
-import { InjectRepository } from '@nestjs/typeorm';
+import { MinioService } from '../storage/minio.service';
+import { ConfigService } from '@nestjs/config';
+
+const PREFIX = '/v1/images';
 
 @Injectable()
 export class ImagesService {
-    constructor(
-        @InjectRepository(Image)
-        private readonly imageRepository: Repository<Image>) { }
-    
-     public getImage(imageId: string) {
-        return this.imageRepository.findOne({ where: { id: imageId } });
+  constructor(
+    @InjectRepository(Image)
+    private imageRepository: Repository<Image>,
+    private minioService: MinioService,
+    private configService: ConfigService
+  ) {}
+
+  async uploadImage(file: Express.Multer.File): Promise<{ url: string }> {    
+    const image = this.imageRepository.create({
+      filename: file.filename,
+      mimeType: file.mimetype
+    });
+
+    await this.imageRepository.save(image);
+
+    return {
+      url: `${this.configService.get('API_URL')}${PREFIX}/${image.id}`
+    };
+  }
+
+  async getImage(id: string): Promise<{ stream: NodeJS.ReadableStream; type: string }> {
+    const image = await this.imageRepository.findOne({ 
+      where: { id } 
+    });
+
+    if (!image) {
+      throw new NotFoundException('Image not found');
     }
 
-    public async uploadImage(file: Express.Multer.File, expirationDate?: Date) {
-        const image = new Image();
-        image.filename = file.filename;
-        image.mimeType = file.mimetype;
-        image.expiresAt = new Date(expirationDate ?? this.getExpirationDate()); // 1 day default
-        image.path = file.path;
-        
-        return this.imageRepository.save(image);
+    try {
+      // Check if file still exists in MinIO
+      await this.minioService.statObject(image.filename);
+      
+      // Get the file stream
+      const stream = await this.minioService.getFileStream(image.filename);
+      return {
+        stream,
+        type: image.mimeType
+      };
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        // Clean up DB if file has expired
+        await this.imageRepository.remove(image);
+        throw new NotFoundException('Image has expired');
+      }
+      throw error;
     }
-
-    public async deleteImage(id: string) {
-        return this.imageRepository.delete(id);
-    }
-
-    private getExpirationDate() {
-        return process.env.EXPIRATION_TIME ? Date.now() + 1000 * Number(process.env.EXPIRATION_TIME) : Date.now() + 1000 * 60 * 60 * 24; // 1 day default
-    }
+  }
 }
